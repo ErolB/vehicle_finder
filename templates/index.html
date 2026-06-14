@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vehicle Finder</title>
+  <style>
+    :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --text:#e2e8f0;
+            --muted:#94a3b8; --accent:#38bdf8; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: var(--bg); color: var(--text); }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    p.sub { color: var(--muted); margin: 0 0 1.5rem; }
+    form { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+           padding: 1.25rem; display: grid; gap: .9rem; }
+    label { display:block; font-size:.8rem; color: var(--muted); margin-bottom:.3rem;
+            text-transform: uppercase; letter-spacing:.04em; }
+    input[type=text], input[type=number] {
+      width:100%; padding:.6rem .7rem; border-radius:8px; border:1px solid var(--line);
+      background:#0b1220; color:var(--text); font-size:1rem; }
+    .row { display:flex; gap:.9rem; flex-wrap:wrap; }
+    .row > div:first-child { flex: 1 1 220px; }
+    .row > div:last-child { width: 110px; }
+    button { justify-self:start; padding:.6rem 1.4rem; border:none; border-radius:8px;
+             background: var(--accent); color:#062536; font-weight:600; font-size:1rem;
+             cursor:pointer; }
+    button:hover { filter: brightness(1.08); }
+    .hint { color: var(--muted); font-size:.78rem; margin-top:.3rem; }
+    .conditions { display:flex; gap:1.25rem; }
+    .check { display:flex; align-items:center; gap:.4rem; font-size:1rem;
+             color: var(--text); text-transform:none; letter-spacing:0; margin:0; cursor:pointer; }
+    .check input { accent-color: var(--accent); width:1.05rem; height:1.05rem; }
+    .results { margin-top: 1.75rem; display:grid; gap:.7rem; }
+    .meta { color: var(--muted); font-size:.9rem; margin: 1.5rem 0 .25rem; }
+    .card { background: var(--card); border:1px solid var(--line); border-radius:10px;
+            padding: .85rem 1rem; display:flex; align-items:center; gap:1rem; }
+    .rank { color: var(--muted); font-variant-numeric: tabular-nums; width:1.6rem;
+            text-align:right; }
+    .info { flex:1; min-width:0; }
+    .info a, .info .name { font-size:1.05rem; font-weight:600; color: var(--accent);
+            text-decoration:none; }
+    .info a:hover { text-decoration: underline; }
+    .vin { color: var(--muted); font-size:.8rem; font-family: ui-monospace, monospace;
+           margin-top:.2rem; }
+    .score { font-variant-numeric: tabular-nums; color: var(--muted); font-size:.85rem;
+             white-space:nowrap; }
+    .error { background:#3b1d1d; border:1px solid #7f1d1d; color:#fecaca;
+             padding:.85rem 1rem; border-radius:10px; margin-top:1.5rem; }
+    .empty { color: var(--muted); margin-top:1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Vehicle Finder</h1>
+    <p class="sub">Semantic search over the inventory, with an optional keyword filter.</p>
+
+    <form method="get" action="/">
+      <div>
+        <label for="q">Search prompt</label>
+        <input type="text" id="q" name="q" value="{{ prompt }}" autofocus
+               placeholder="e.g. comfortable family SUV with low mileage">
+      </div>
+      <div class="row">
+        <div>
+          <label for="keywords">Required keywords (optional)</label>
+          <input type="text" id="keywords" name="keywords" value="{{ keywords }}"
+                 placeholder='e.g. Diesel 4x4 &quot;Apple CarPlay&quot;'>
+          <div class="hint">Space- or comma-separated. Only vehicles whose listing
+            contains <em>all</em> of these are ranked. Use quotes for a phrase,
+            e.g. &ldquo;Apple CarPlay&rdquo;.</div>
+        </div>
+        <div>
+          <label for="k">Results</label>
+          <input type="number" id="k" name="k" value="{{ top_k }}" min="1" max="50">
+        </div>
+      </div>
+      <div>
+        <label>Condition</label>
+        <div class="conditions">
+          <label class="check"><input type="checkbox" name="condition" value="new"
+            {{ 'checked' if new_checked }}> New</label>
+          <label class="check"><input type="checkbox" name="condition" value="used"
+            {{ 'checked' if used_checked }}> Used</label>
+        </div>
+      </div>
+      <button type="submit">Search</button>
+    </form>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% elif results %}
+      <div class="meta">
+        Top {{ results|length }} match{{ '' if results|length == 1 else 'es' }}
+        {%- if keywords %} filtered by &ldquo;{{ keywords }}&rdquo;{% endif %}.
+      </div>
+      <div class="results">
+        {% for r in results %}
+          <div class="card">
+            <div class="rank">{{ r.rank }}</div>
+            <div class="info">
+              {% if r.url %}
+                <a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.name }}</a>
+              {% else %}
+                <span class="name">{{ r.name }}</span>
+              {% endif %}
+              <div class="vin">{{ r.vin }}</div>
+            </div>
+            <div class="score">{{ '%.4f'|format(r.score) }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% elif searched %}
+      <p class="empty">No matches.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

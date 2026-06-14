@@ -1,0 +1,38 @@
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Generated pipeline artifacts ---
+# model/        : fine-tuned weights from finetune.py (~400 MB)
+# embeddings/   : vectors from embedding.py (derived from text/)
+# html/ is left tracked (per request); each file is under GitHub's 100 MB limit.
+model/
+embeddings/
+
+
+# Smaller, but still regenerable from the pipeline. Uncomment to stop
+# tracking them (descriptions/ is produced by an LLM, so costs money to
+# rebuild — left tracked by default).
+# text/
+# descriptions/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.swp
