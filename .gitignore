@@ -16,12 +16,11 @@ venv/
 env/
 .ipynb_checkpoints/
 
-# --- Generated pipeline artifacts ---
-# model/        : fine-tuned weights from finetune.py (~400 MB)
-# embeddings/   : vectors from embedding.py (derived from text/)
-# html/ is left tracked (per request); each file is under GitHub's 100 MB limit.
-model/
-embeddings/
+# --- Generated pipeline artifacts (tracked) ---
+# model/      : fine-tuned weights from finetune.py; model.safetensors (~400 MB)
+#               is stored via Git LFS (see .gitattributes).
+# embeddings/ : vectors from embedding.py.
+# html/       : raw pages from scraper.py.
 
 
 # Smaller, but still regenerable from the pipeline. Uncomment to stop
