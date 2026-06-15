@@ -20,8 +20,6 @@ env/
 # model/        : fine-tuned weights from finetune.py (~400 MB)
 # embeddings/   : vectors from embedding.py (derived from text/)
 # html/ is left tracked (per request); each file is under GitHub's 100 MB limit.
-model/
-embeddings/
 
 
 # Smaller, but still regenerable from the pipeline. Uncomment to stop
