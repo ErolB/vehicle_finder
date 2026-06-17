@@ -3,11 +3,13 @@ import re
 import glob
 import argparse
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 # Our custom model, fine-tuned on text/ by finetune.py. Must match the model
 # embedding.py used to build the vectors in EMBED_DIR.
 MODEL = "model"
+# Voyage model used by the --api backend (key in .env as VOYAGE_API_KEY). Must
+# match the model embedding.py --api built EMBED_DIR with.
+VOYAGE_MODEL = "voyage-4-large"
 EMBED_DIR = "embeddings"
 TEXT_DIR = "text"
 HTML_DIR = "html"
@@ -17,6 +19,23 @@ _CANONICAL_TAG = re.compile(r'<link\b[^>]*\brel="canonical"[^>]*>', re.IGNORECAS
 _HREF = re.compile(r'\bhref="([^"]+)"', re.IGNORECASE)
 # New vs used is encoded in the listing URL path (.../new/... or .../used/...).
 _URL_CONDITION = re.compile(r"/(new|used)/", re.IGNORECASE)
+# Mileage appears in two listing layouts: a table row ("| Odometer | 69,269
+# miles |") and a bold bullet ("- **Odometer:** 69,269 miles"). Both put only
+# punctuation/whitespace ([:*|] and spaces) between the label and the number, so
+# requiring that — rather than allowing any text — is what keeps this from
+# matching the CARFAX sentence "Odometer is 6,590 miles below market average"
+# (the word "is" sits between "Odometer" and the number there).
+_ODOMETER = re.compile(r"Odometer[:*|\s]*([\d,]+)\s*miles", re.IGNORECASE)
+# Prices sit in a Pricing block of label/amount rows, in the same two layouts as
+# mileage: table cells ("| MSRP | $45,905 |") and bold bullets ("- **Price:**
+# $21,000"). Match a Price/MSRP label joined to a "$" amount by punctuation only
+# ([:*|] and spaces) — so the dealer-fee and trade-in dollar amounts in the
+# disclaimer prose ("$995 dealer fee", "ACV of $10,000"), which have no price
+# label in front, are left out. Captures (label, sign, amount).
+_PRICE_ROW = re.compile(r"(MSRP|[\w ]*Price)[:*|\s]*(-?)\$\s*([\d,]+)", re.IGNORECASE)
+# Label fragments that mark a discount/savings row (e.g. "Beck Yeah Price",
+# "... Discount") rather than a price the customer pays.
+_DISCOUNT_LABEL = re.compile(r"yeah|discount|saving|rebate", re.IGNORECASE)
 
 
 def _listing_title(vin, text_dir=TEXT_DIR):
@@ -63,6 +82,62 @@ def vehicle_condition(vin, text_dir=TEXT_DIR, html_dir=HTML_DIR):
     return match.group(1).lower() if match else None
 
 
+def vehicle_mileage(vin, text_dir=TEXT_DIR):
+    """Return the odometer reading (int miles) from a listing, else None.
+
+    Reads the Overview table's odometer row. New vehicles have no such row, so
+    they return None (no meaningful mileage to show). Returns None if the text
+    file is missing.
+    """
+    path = os.path.join(text_dir, "%s.txt" % vin)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as text_file:
+        match = _ODOMETER.search(text_file.read())
+    return int(match.group(1).replace(",", "")) if match else None
+
+
+def vehicle_price(vin, text_dir=TEXT_DIR):
+    """Return (price, list_price) in whole dollars for a listing.
+
+    price is the dealer's lowest advertised (sale) price; list_price is the MSRP
+    when one is shown and it's higher than price, so the caller can strike it
+    through. Both are None when the listing has no numeric price (e.g. "Price:
+    Please Call"); list_price alone is None when there's no higher MSRP to show.
+    Reads the Pricing rows and skips discount/savings lines and the dealer-fee /
+    trade-in dollar amounts in the disclaimer prose.
+    """
+    path = os.path.join(text_dir, "%s.txt" % vin)
+    if not os.path.exists(path):
+        return None, None
+    with open(path, encoding="utf-8") as text_file:
+        text = text_file.read()
+
+    msrp, sale = None, []
+    for label, sign, amount in _PRICE_ROW.findall(text):
+        value = int(amount.replace(",", ""))
+        if "MSRP" in label.upper():
+            msrp = value
+        elif sign == "-" or _DISCOUNT_LABEL.search(label):
+            continue  # a discount/savings line, not a price the customer pays
+        else:
+            sale.append(value)
+
+    # A few listings put a tiny delta in the sale-price cell (e.g. "$280 (above
+    # MSRP after incentives)"). When an MSRP is known, drop sale figures
+    # implausibly far below it so that quirk can't masquerade as the price; real
+    # new-car discounts stay well above half of MSRP.
+    if msrp is not None:
+        sale = [v for v in sale if v >= msrp / 2]
+
+    if sale:
+        price = min(sale)  # the dealer's best advertised price
+    else:
+        price, msrp = msrp, None  # only an MSRP listed — show it as the price
+    show_msrp = msrp if (price is not None and msrp is not None and msrp > price) else None
+    return price, show_msrp
+
+
 def listing_url(vin, html_dir=HTML_DIR):
     """Return the dealership listing URL from the saved page's canonical link."""
     path = os.path.join(html_dir, "%s.html" % vin)
@@ -96,6 +171,9 @@ def matches_keywords(vin, keywords, text_dir=TEXT_DIR):
 
 
 def load_model(model=MODEL):
+    # Imported lazily so the --api backend doesn't require sentence-transformers.
+    from sentence_transformers import SentenceTransformer
+
     if not os.path.isdir(model):
         raise SystemExit(
             "custom model %r not found — run `python finetune.py` first" % model
@@ -103,9 +181,45 @@ def load_model(model=MODEL):
     return SentenceTransformer(model)
 
 
-class Searcher:
-    def __init__(self, model=MODEL, embed_dir=EMBED_DIR):
+class LocalEncoder:
+    """Encode the query with the local fine-tuned model (the default)."""
+
+    def __init__(self, model=MODEL):
         self.model = load_model(model)
+
+    def encode(self, text):
+        return self.model.encode(text)
+
+
+class VoyageEncoder:
+    """Encode the query with the Voyage API (--api).
+
+    Reads VOYAGE_API_KEY from .env. Uses input_type="query" — the asymmetric
+    counterpart to the "document" embeddings embedding.py --api wrote to disk.
+    """
+
+    def __init__(self, model=VOYAGE_MODEL):
+        # Imported lazily so local-only users don't need the voyageai package.
+        import voyageai
+        from dotenv import load_dotenv
+
+        load_dotenv()  # populate VOYAGE_API_KEY from .env
+        if not os.environ.get("VOYAGE_API_KEY"):
+            raise SystemExit("set VOYAGE_API_KEY in .env to use --api")
+        # The client reads VOYAGE_API_KEY from the environment.
+        self.client = voyageai.Client()
+        self.model = model
+
+    def encode(self, text):
+        result = self.client.embed(
+            [text or " "], model=self.model, input_type="query"
+        )
+        return np.array(result.embeddings[0], dtype=np.float32)
+
+
+class Searcher:
+    def __init__(self, encoder=None, embed_dir=EMBED_DIR):
+        self.encoder = encoder or LocalEncoder()
         self.embed_dir = embed_dir
 
     def _load_embeddings(self, keywords=None, conditions=None):
@@ -139,7 +253,7 @@ class Searcher:
     def search(self, prompt, top_k=5, keywords=None, conditions=None):
         """Return the top_k (VIN, score) pairs closest to the prompt."""
         vins, matrix = self._load_embeddings(keywords, conditions)
-        query = self.model.encode(prompt)
+        query = self.encoder.encode(prompt)
 
         # Cosine similarity: normalize both sides, then dot product.
         matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
@@ -162,9 +276,17 @@ def main():
         "-w", "--keywords", nargs="+", metavar="KEYWORD",
         help="only rank vehicles whose listing text contains ALL these keywords",
     )
+    parser.add_argument(
+        "--api", action="store_true",
+        help="encode the query with the Voyage API (%s) instead of the local "
+             "model; EMBED_DIR must have been built with embedding.py --api too"
+             % VOYAGE_MODEL,
+    )
     args = parser.parse_args()
 
-    for vin, score in Searcher().search(args.prompt, args.top_k, args.keywords):
+    encoder = VoyageEncoder() if args.api else LocalEncoder()
+    searcher = Searcher(encoder)
+    for vin, score in searcher.search(args.prompt, args.top_k, args.keywords):
         print("%s\t%.4f\t%s" % (vin, score, vehicle_name(vin)))
 
 

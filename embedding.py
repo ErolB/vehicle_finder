@@ -1,12 +1,14 @@
 import os
 import glob
+import argparse
 from collections import Counter
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 # Our custom model, fine-tuned on text/ by finetune.py. Run that first.
 MODEL = "model"
+# Voyage model used by the --api backend (key in .env as VOYAGE_API_KEY).
+VOYAGE_MODEL = "voyage-4-large"
 TEXT_DIR = "text"
 EMBED_DIR = "embeddings"
 
@@ -34,28 +36,10 @@ def find_boilerplate(text_paths, threshold=BOILERPLATE_DF):
 
 
 class Embedder:
-    def __init__(self, model=MODEL):
-        self.model = load_model(model)
-        self.tokenizer = self.model.tokenizer
-        # Leave room for the [CLS]/[SEP] tokens encode() adds to each chunk.
-        self.window = self.model.max_seq_length - 2
+    """Shared embedding pipeline. Subclasses provide embed_text()."""
 
     def embed_text(self, text):
-        """Embed arbitrarily long text by mean-pooling over token-window chunks.
-
-        The model truncates anything past max_seq_length, so a single encode()
-        would only see the first chunk. Instead we split the token stream into
-        windows, embed each, and average — so the whole page is represented.
-        """
-        ids = self.tokenizer.encode(text, add_special_tokens=False)
-        if not ids:
-            ids = self.tokenizer.encode(" ", add_special_tokens=False)
-        chunks = [
-            self.tokenizer.decode(ids[start:start + self.window])
-            for start in range(0, len(ids), self.window)
-        ]
-        vectors = self.model.encode(chunks)  # (n_chunks, dim)
-        return vectors.mean(axis=0)
+        raise NotImplementedError
 
     def embed_file(self, text_path, boilerplate=frozenset()):
         """Return the embedding for one listing, minus the shared chrome."""
@@ -79,7 +63,64 @@ class Embedder:
             print("embedded %s (%d dims)" % (vin, vector.shape[0]))
 
 
+class LocalEmbedder(Embedder):
+    """Embed with the local fine-tuned SentenceTransformer (the default)."""
+
+    def __init__(self, model=MODEL):
+        self.model = load_model(model)
+        self.tokenizer = self.model.tokenizer
+        # Leave room for the [CLS]/[SEP] tokens encode() adds to each chunk.
+        self.window = self.model.max_seq_length - 2
+
+    def embed_text(self, text):
+        """Embed arbitrarily long text by mean-pooling over token-window chunks.
+
+        The model truncates anything past max_seq_length, so a single encode()
+        would only see the first chunk. Instead we split the token stream into
+        windows, embed each, and average — so the whole page is represented.
+        """
+        ids = self.tokenizer.encode(text, add_special_tokens=False)
+        if not ids:
+            ids = self.tokenizer.encode(" ", add_special_tokens=False)
+        chunks = [
+            self.tokenizer.decode(ids[start:start + self.window])
+            for start in range(0, len(ids), self.window)
+        ]
+        vectors = self.model.encode(chunks)  # (n_chunks, dim)
+        return vectors.mean(axis=0)
+
+
+class VoyageEmbedder(Embedder):
+    """Embed with the Voyage API instead of the local model (--api).
+
+    Reads VOYAGE_API_KEY from .env. voyage-4-large has a 32k-token context, so
+    a listing fits in a single call; truncation (the SDK default) is a safety
+    net for the rare over-long page rather than the norm.
+    """
+
+    def __init__(self, model=VOYAGE_MODEL):
+        # Imported lazily so local-only users don't need the voyageai package.
+        import voyageai
+        from dotenv import load_dotenv
+
+        load_dotenv()  # populate VOYAGE_API_KEY from .env
+        if not os.environ.get("VOYAGE_API_KEY"):
+            raise SystemExit("set VOYAGE_API_KEY in .env to use --api")
+        # The client reads VOYAGE_API_KEY from the environment.
+        self.client = voyageai.Client()
+        self.model = model
+
+    def embed_text(self, text):
+        result = self.client.embed(
+            [text or " "], model=self.model, input_type="document"
+        )
+        return np.array(result.embeddings[0], dtype=np.float32)
+
+
 def load_model(model=MODEL):
+    # Imported lazily so the --api backend doesn't require sentence-transformers.
+    from sentence_transformers import SentenceTransformer
+
     if not os.path.isdir(model):
         raise SystemExit(
             "custom model %r not found — run `python finetune.py` first" % model
@@ -87,5 +128,19 @@ def load_model(model=MODEL):
     return SentenceTransformer(model)
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        description="Embed each listing in text/ into embeddings/<VIN>.npy."
+    )
+    parser.add_argument(
+        "--api", action="store_true",
+        help="use the Voyage API (%s) instead of the local fine-tuned model; "
+             "reads VOYAGE_API_KEY from .env" % VOYAGE_MODEL,
+    )
+    args = parser.parse_args()
+    embedder = VoyageEmbedder() if args.api else LocalEmbedder()
+    embedder.embed()
+
+
 if __name__ == "__main__":
-    Embedder().embed()
+    main()

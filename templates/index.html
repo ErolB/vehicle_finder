@@ -44,6 +44,12 @@
     .info a:hover { text-decoration: underline; }
     .vin { color: var(--muted); font-size:.8rem; font-family: ui-monospace, monospace;
            margin-top:.2rem; }
+    .mileage { color: var(--text); font-size:.85rem; margin-top:.25rem;
+               font-variant-numeric: tabular-nums; }
+    .price { color: var(--text); font-size:1rem; font-weight:600; margin-top:.2rem;
+             font-variant-numeric: tabular-nums; }
+    .price .msrp { color: var(--muted); font-weight:400; font-size:.85rem;
+                   text-decoration: line-through; margin-left:.4rem; }
     .score { font-variant-numeric: tabular-nums; color: var(--muted); font-size:.85rem;
              white-space:nowrap; }
     .error { background:#3b1d1d; border:1px solid #7f1d1d; color:#fecaca;
@@ -85,6 +91,16 @@
             {{ 'checked' if used_checked }}> Used</label>
         </div>
       </div>
+      <div>
+        <label>Query embedding</label>
+        <div class="conditions">
+          <label class="check"><input type="checkbox" name="api" value="1"
+            {{ 'checked' if api_checked }}> Use Voyage API</label>
+        </div>
+        <div class="hint">Embed the query with the Voyage API instead of the local
+          model. The inventory in <code>embeddings/</code> must have been built
+          with the same backend (<code>embedding.py --api</code>).</div>
+      </div>
       <button type="submit">Search</button>
     </form>
 
@@ -106,6 +122,21 @@
                 <span class="name">{{ r.name }}</span>
               {% endif %}
               <div class="vin">{{ r.vin }}</div>
+              <div class="mileage">
+                {%- if r.mileage is defined and r.mileage is not none -%}
+                  {{ '{:,}'.format(r.mileage) }} miles
+                {%- else -%}
+                  Mileage n/a
+                {%- endif -%}
+              </div>
+              <div class="price">
+                {%- if r.price is defined and r.price is not none -%}
+                  ${{ '{:,}'.format(r.price) }}
+                  {%- if r.list_price %} <span class="msrp">${{ '{:,}'.format(r.list_price) }}</span>{% endif -%}
+                {%- else -%}
+                  Price n/a
+                {%- endif -%}
+              </div>
             </div>
             <div class="score">{{ '%.4f'|format(r.score) }}</div>
           </div>
