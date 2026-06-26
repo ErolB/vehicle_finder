@@ -52,9 +52,12 @@ def load_chunks(text_dir=TEXT_DIR):
 def load_pairs(text_dir=TEXT_DIR, desc_dir=DESC_DIR):
     """Return [(vin, cleaned_text, description), ...] for VINs that have both.
 
-    The text side is boilerplate-stripped (shared dealer chrome removed), the
-    same cleaning embedding.py applies, so training and indexing see the same
-    text. VINs missing either file are skipped.
+    describe.py writes several descriptions per listing (one per line), each
+    highlighting a different combination of features. We emit one pair per
+    description, so a single listing contributes multiple positive pairs that
+    share the same text side. The text side is boilerplate-stripped (shared
+    dealer chrome removed), the same cleaning embedding.py applies, so training
+    and indexing see the same text. VINs missing either file are skipped.
     """
     candidates = []
     for desc_path in sorted(glob.glob(os.path.join(desc_dir, "*.txt"))):
@@ -71,9 +74,10 @@ def load_pairs(text_dir=TEXT_DIR, desc_dir=DESC_DIR):
         lines = [l for l in document_lines(text_path) if l not in boilerplate]
         text = "\n".join(lines)
         with open(desc_path, encoding="utf-8") as desc_file:
-            description = desc_file.read().strip()
-        if text and description:
-            pairs.append((vin, text, description))
+            descriptions = [l.strip() for l in desc_file if l.strip()]
+        if text:
+            for description in descriptions:
+                pairs.append((vin, text, description))
     return pairs
 
 
@@ -150,8 +154,13 @@ def build_examples(model, paired, holdout, seed):
         random.Random(seed).shuffle(pairs)
         held = set()
         if holdout > 0:
-            n_hold = max(1, int(len(pairs) * holdout))
-            held = {vin for vin, _, _ in pairs[:n_hold]}
+            # Hold out a fraction of VINs (not pairs): a listing now yields
+            # several pairs, so all of a held VIN's descriptions must be
+            # excluded together to keep the held set out of training.
+            vins = sorted({vin for vin, _, _ in pairs})
+            random.Random(seed).shuffle(vins)
+            n_hold = max(1, int(len(vins) * holdout))
+            held = set(vins[:n_hold])
         write_holdout(held)
         train_pairs = [p for p in pairs if p[0] not in held]
         if held:

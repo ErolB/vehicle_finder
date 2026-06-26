@@ -152,6 +152,23 @@ def listing_url(vin, html_dir=HTML_DIR):
     return href.group(1) if href else None
 
 
+def _in_range(value, low, high):
+    """True if value falls within the optional [low, high] bounds.
+
+    An unknown value (None — e.g. a "Please Call" price or a new car's missing
+    odometer) passes: a best-effort numeric pre-filter shouldn't drop a listing
+    just because the figure couldn't be parsed. Bounds are inclusive; either end
+    may be None to leave that side open.
+    """
+    if value is None:
+        return True
+    if low is not None and value < low:
+        return False
+    if high is not None and value > high:
+        return False
+    return True
+
+
 def matches_keywords(vin, keywords, text_dir=TEXT_DIR):
     """True if the listing's text contains every keyword as a whole word.
 
@@ -222,19 +239,35 @@ class Searcher:
         self.encoder = encoder or LocalEncoder()
         self.embed_dir = embed_dir
 
-    def _load_embeddings(self, keywords=None, conditions=None):
+    def _load_embeddings(self, keywords=None, conditions=None,
+                         price_range=(None, None), mileage_range=(None, None)):
         """Return (vins, matrix) for the candidate embeddings/<VIN>.npy files.
 
         Listings are filtered before the vector search, so ranking happens over
         the survivors only. `keywords` keeps listings whose text contains all of
-        them; `conditions` (e.g. {"new", "used"}) keeps the matching conditions.
+        them; `conditions` (e.g. {"new", "used"}) keeps the matching conditions;
+        `price_range` and `mileage_range` are (low, high) dollar/mile bounds that
+        keep listings whose price/odometer falls within them (see _in_range).
         """
+        min_price, max_price = price_range
+        min_mileage, max_mileage = mileage_range
+        check_price = min_price is not None or max_price is not None
+        check_mileage = min_mileage is not None or max_mileage is not None
+
         vins, vectors = [], []
         for path in sorted(glob.glob(os.path.join(self.embed_dir, "*.npy"))):
             vin = os.path.splitext(os.path.basename(path))[0]
             if conditions and vehicle_condition(vin) not in conditions:
                 continue
             if keywords and not matches_keywords(vin, keywords):
+                continue
+            if check_price and not _in_range(
+                vehicle_price(vin)[0], min_price, max_price
+            ):
+                continue
+            if check_mileage and not _in_range(
+                vehicle_mileage(vin), min_mileage, max_mileage
+            ):
                 continue
             vins.append(vin)
             vectors.append(np.load(path))
@@ -243,6 +276,8 @@ class Searcher:
                 raise SystemExit(
                     "no listings contain all keywords: %s" % ", ".join(keywords)
                 )
+            if check_price or check_mileage:
+                raise SystemExit("no vehicles match the price/mileage filters")
             if conditions:
                 raise SystemExit(
                     "no %s vehicles found" % " or ".join(sorted(conditions))
@@ -250,9 +285,12 @@ class Searcher:
             raise SystemExit("no embeddings found in %s/" % self.embed_dir)
         return vins, np.vstack(vectors)
 
-    def search(self, prompt, top_k=5, keywords=None, conditions=None):
+    def search(self, prompt, top_k=5, keywords=None, conditions=None,
+               price_range=(None, None), mileage_range=(None, None)):
         """Return the top_k (VIN, score) pairs closest to the prompt."""
-        vins, matrix = self._load_embeddings(keywords, conditions)
+        vins, matrix = self._load_embeddings(
+            keywords, conditions, price_range, mileage_range
+        )
         query = self.encoder.encode(prompt)
 
         # Cosine similarity: normalize both sides, then dot product.

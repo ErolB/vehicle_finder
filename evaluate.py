@@ -56,26 +56,30 @@ def main():
     holdout = load_holdout()
     eval_idx = [i for i, vin in enumerate(vins) if vin in holdout] or list(range(len(vins)))
     mode = "held-out" if holdout else "all (in-sample)"
-    print("scoring %d %s description queries against %d listings...\n"
+    print("scoring descriptions from %d %s listings against %d listings...\n"
           % (len(eval_idx), mode, len(vins)))
 
     ks = sorted(args.ks)
     hits = {k: 0 for k in ks}
     reciprocal, ranks = 0.0, []
     for i in eval_idx:
+        # describe.py writes several descriptions per listing (one per line);
+        # each is a separate query that should still retrieve VIN i's listing.
         with open(desc_paths[i], encoding="utf-8") as desc_file:
-            query = embedder.embed_text(desc_file.read())
-        query = query / np.linalg.norm(query)
-        scores = corpus @ query
-        # rank (0-based) of this VIN's own listing among all listings
-        rank = int((scores > scores[i]).sum())
-        ranks.append(rank)
-        reciprocal += 1.0 / (rank + 1)
-        for k in ks:
-            if rank < k:
-                hits[k] += 1
+            descriptions = [l.strip() for l in desc_file if l.strip()]
+        for description in descriptions:
+            query = embedder.embed_text(description)
+            query = query / np.linalg.norm(query)
+            scores = corpus @ query
+            # rank (0-based) of this VIN's own listing among all listings
+            rank = int((scores > scores[i]).sum())
+            ranks.append(rank)
+            reciprocal += 1.0 / (rank + 1)
+            for k in ks:
+                if rank < k:
+                    hits[k] += 1
 
-    n = len(eval_idx)
+    n = len(ranks)
     print("recall@k (description finds its own listing):")
     for k in ks:
         print("  @%-3d %.3f" % (k, hits[k] / n))

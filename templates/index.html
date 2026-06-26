@@ -23,6 +23,24 @@
     .row { display:flex; gap:.9rem; flex-wrap:wrap; }
     .row > div:first-child { flex: 1 1 220px; }
     .row > div:last-child { width: 110px; }
+    .slider-head { display:flex; justify-content:space-between; align-items:baseline; }
+    .slider-head output { color: var(--text); font-size:.9rem; text-transform:none;
+            letter-spacing:0; font-variant-numeric: tabular-nums; }
+    .slider-track { position:relative; height:1.6rem; }
+    .slider-rail, .slider-fill { position:absolute; top:50%; transform:translateY(-50%);
+            height:4px; border-radius:4px; }
+    .slider-rail { left:0; right:0; background: var(--line); }
+    .slider-fill { background: var(--accent); }
+    .slider-track input[type=range] {
+            position:absolute; top:0; left:0; width:100%; height:1.6rem; margin:0;
+            background:none; pointer-events:none; -webkit-appearance:none; appearance:none; }
+    .slider-track input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance:none; appearance:none; pointer-events:auto;
+            width:1.1rem; height:1.1rem; border-radius:50%; background: var(--accent);
+            border:2px solid #062536; cursor:pointer; }
+    .slider-track input[type=range]::-moz-range-thumb {
+            pointer-events:auto; width:1.1rem; height:1.1rem; border-radius:50%;
+            background: var(--accent); border:2px solid #062536; cursor:pointer; }
     button { justify-self:start; padding:.6rem 1.4rem; border:none; border-radius:8px;
              background: var(--accent); color:#062536; font-weight:600; font-size:1rem;
              cursor:pointer; }
@@ -82,6 +100,35 @@
           <input type="number" id="k" name="k" value="{{ top_k }}" min="1" max="50">
         </div>
       </div>
+      <div class="slider" data-min="0" data-max="{{ price_cap }}" data-step="500"
+           data-prefix="$" data-low="{{ min_price }}" data-high="{{ max_price }}">
+        <div class="slider-head">
+          <label>Price</label>
+          <output class="slider-out"></output>
+        </div>
+        <div class="slider-track">
+          <div class="slider-rail"></div>
+          <div class="slider-fill"></div>
+          <input type="range" class="slider-low" name="min_price">
+          <input type="range" class="slider-high" name="max_price">
+        </div>
+      </div>
+      <div class="slider" data-min="0" data-max="{{ mileage_cap }}" data-step="1000"
+           data-suffix=" mi" data-low="{{ min_mileage }}" data-high="{{ max_mileage }}">
+        <div class="slider-head">
+          <label>Mileage</label>
+          <output class="slider-out"></output>
+        </div>
+        <div class="slider-track">
+          <div class="slider-rail"></div>
+          <div class="slider-fill"></div>
+          <input type="range" class="slider-low" name="min_mileage">
+          <input type="range" class="slider-high" name="max_mileage">
+        </div>
+      </div>
+      <div class="hint">Price and mileage narrow the inventory before the semantic
+        search. Drag a handle to its end (shown as &ldquo;Any&rdquo;) to leave that
+        bound open; listings with no listed price or mileage are kept.</div>
       <div>
         <label>Condition</label>
         <div class="conditions">
@@ -146,5 +193,56 @@
       <p class="empty">No matches.</p>
     {% endif %}
   </div>
+  <script>
+    // Dual-handle range sliders: two overlaid <input type=range> share a track,
+    // the named one submits its value. A handle parked at its end means "no
+    // bound" — we disable that input on submit so the field is omitted (blank),
+    // which the server reads as an open bound.
+    document.querySelectorAll('.slider').forEach(function (slider) {
+      var min = +slider.dataset.min, max = +slider.dataset.max;
+      var step = +slider.dataset.step;
+      var prefix = slider.dataset.prefix || '', suffix = slider.dataset.suffix || '';
+      var low = slider.querySelector('.slider-low');
+      var high = slider.querySelector('.slider-high');
+      var fill = slider.querySelector('.slider-fill');
+      var out = slider.querySelector('.slider-out');
+
+      [low, high].forEach(function (input) {
+        input.min = min; input.max = max; input.step = step;
+      });
+      low.value = slider.dataset.low;
+      high.value = slider.dataset.high;
+
+      function fmt(n) { return prefix + Number(n).toLocaleString() + suffix; }
+
+      function update() {
+        var lo = +low.value, hi = +high.value;
+        if (lo > hi) {  // stop the handles from crossing past each other
+          if (document.activeElement === low) { lo = hi; low.value = hi; }
+          else { hi = lo; high.value = lo; }
+        }
+        var span = (max - min) || 1;
+        fill.style.left = ((lo - min) / span * 100) + '%';
+        fill.style.right = ((max - hi) / span * 100) + '%';
+        out.textContent = (lo <= min ? 'Any' : fmt(lo)) + ' – ' +
+                          (hi >= max ? 'Any' : fmt(hi));
+      }
+
+      low.addEventListener('input', update);
+      high.addEventListener('input', update);
+      update();
+    });
+
+    // On submit, drop any handle sitting at its extreme so that bound is omitted.
+    document.querySelector('form').addEventListener('submit', function () {
+      document.querySelectorAll('.slider').forEach(function (slider) {
+        var min = +slider.dataset.min, max = +slider.dataset.max;
+        var low = slider.querySelector('.slider-low');
+        var high = slider.querySelector('.slider-high');
+        if (+low.value <= min) low.disabled = true;
+        if (+high.value >= max) high.disabled = true;
+      });
+    });
+  </script>
 </body>
 </html>
